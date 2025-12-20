@@ -17,6 +17,9 @@
 #include "ethernet_init.h"
 #include "sdkconfig.h"
 #include "tcp_server.h"
+#include "nvs_flash.h"
+#include "settings.h"
+#include "driver/gpio.h"
 
 static const char *TAG = "bridge";
 
@@ -64,8 +67,45 @@ static void got_ip_event_handler(void *arg, esp_event_base_t event_base,
     ESP_LOGI(TAG, "~~~~~~~~~~~");
 }
 
+static void config_mode_task(void *pvParameters)
+{
+    gpio_set_direction(DEFAULT_CONFIG_GPIO, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(DEFAULT_CONFIG_GPIO, GPIO_PULLUP_ONLY);
+
+    bool webserver_started = false;
+
+    while (1) {
+        if (gpio_get_level(DEFAULT_CONFIG_GPIO) == 0) {
+            if (!webserver_started) {
+                ESP_LOGI(TAG, "Configuration mode enabled, starting web server");
+                start_webserver();
+                webserver_started = true;
+            }
+        } 
+        // else {
+        //     if (webserver_started) {
+        //         ESP_LOGI(TAG, "Configuration mode disabled, stopping web server");
+        //         stop_webserver();
+        //         webserver_started = false;
+        //     }
+        // }
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+    }
+}
+
 void app_main(void)
 {
+    //Initialize NVS
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    settings_t settings;
+    load_settings(&settings);
+
     // Initialize Ethernet driver
     uint8_t eth_port_cnt = 0;
     esp_eth_handle_t *eth_handles;
@@ -118,5 +158,7 @@ void app_main(void)
         ESP_ERROR_CHECK(esp_eth_start(eth_handles[i]));
     }
 
-    tcp_server_create();
+    xTaskCreate(config_mode_task, "config_mode_task", 2048, NULL, 5, NULL);
+
+    tcp_server_create(&settings);
 }

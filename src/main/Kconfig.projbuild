@@ -1,5 +1,12 @@
 menu "Eth-UART Bridge Configuration"
 
+    config WEBSERVER_GPIO
+        int "Start web server GPIO number"
+        range 1 34
+        default 12
+        help
+            GPIO number (IOxx) for starting web server. Ground this pin to start the web server.
+
     config HAS_CLK_EN_PIN
         bool "Has clock enable pin"
         default y
@@ -17,13 +24,6 @@ menu "Eth-UART Bridge Configuration"
         default 3142
         help
             Local port the UART bridge will listen on.
-
-    config ECHO_PORT
-        int "Echo port"
-        range 0 65535
-        default 3333
-        help
-            Local port the echo server will listen on.
 
     config EXAMPLE_KEEPALIVE_IDLE
         int "TCP keep-alive idle time(s)"

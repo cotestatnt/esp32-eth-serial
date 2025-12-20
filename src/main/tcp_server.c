@@ -26,6 +26,9 @@
 #include <lwip/netdb.h>
 #include <stdbool.h>
 
+#include "settings.h"
+#include "tcp_server.h"
+
 #define KEEPALIVE_IDLE              CONFIG_EXAMPLE_KEEPALIVE_IDLE
 #define KEEPALIVE_INTERVAL          CONFIG_EXAMPLE_KEEPALIVE_INTERVAL
 #define KEEPALIVE_COUNT             CONFIG_EXAMPLE_KEEPALIVE_COUNT
@@ -44,35 +47,6 @@ struct server_port {
     char           buff[BUFF_SZ];
 };
 
-static void do_echo(int sock, struct server_port* srv)
-{
-    for (;;)
-    {
-        int len = recv(sock, srv->buff, BUFF_SZ, 0);
-        if (len < 0) {
-            ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
-            return;
-        } else if (len == 0) {
-            ESP_LOGW(TAG, "Connection closed");
-            return;
-        } else {
-            // send() can return less bytes than supplied length.
-            // Walk-around for robust implementation.
-            char* ptr = srv->buff;
-            while (len) {
-                int const written = send(sock, ptr, len, 0);
-                if (written < 0) {
-                    ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
-                    // Failed to retransmit, giving up
-                    return;
-                }
-                len -= written;
-                ptr += written;
-            }
-        }
-    }
-}
-
 static void do_bridge(int sock, struct server_port* srv)
 {
     ESP_ERROR_CHECK(fcntl(sock, F_SETFL, fcntl(sock, F_GETFL, 0) | O_NONBLOCK));
@@ -81,7 +55,7 @@ static void do_bridge(int sock, struct server_port* srv)
         bool idle = true;
         // Read UART
         for (;;) {
-            int size = uart_read_bytes(srv->uart, srv->buff, BUFF_SZ, idle ? 0 : 1);
+            int size = uart_read_bytes(srv->uart, (uint8_t*)srv->buff, BUFF_SZ, idle ? 0 : 1);
             if (size < 0) {
                 ESP_LOGE(TAG, "Uart read failed");
                 return;
@@ -113,7 +87,7 @@ static void do_bridge(int sock, struct server_port* srv)
             ESP_LOGW(TAG, "Connection closed");
             break;
         } else {
-            ESP_LOGI(TAG, "Eth  -> UART %d bytes", rx_len);
+            ESP_LOGI(TAG, "Eth -> UART %d bytes: %.*s", rx_len, rx_len, srv->buff);
             uart_write_bytes(srv->uart, srv->buff, rx_len);
             idle = false;
         }
@@ -121,7 +95,7 @@ static void do_bridge(int sock, struct server_port* srv)
             vTaskDelay(1);
     }
     for (;;) {
-        int const left = uart_read_bytes(srv->uart, srv->buff, BUFF_SZ, 8);
+        int const left = uart_read_bytes(srv->uart, (uint8_t*)srv->buff, BUFF_SZ, 8);
         if (left <= 0)
             break;
     }
@@ -214,16 +188,15 @@ CLEAN_UP:
 #define UART_TX_GPIO  CONFIG_UART_TX_GPIO
 #define UART_RX_GPIO  CONFIG_UART_RX_GPIO
 #define UART_RTS_GPIO CONFIG_UART_RTS_GPIO
-#define UART_BITRATE  CONFIG_UART_BITRATE
 
 #define UART_RX_BUF_SZ (1024 * CONFIG_UART_RX_BUFF_SIZE)
 #define UART_TX_BUF_SZ (1024 * CONFIG_UART_TX_BUFF_SIZE)
 
-static esp_err_t bridge_uart_init(void)
+static esp_err_t bridge_uart_init(int baud_rate)
 {
     /* Configure UART */
     uart_config_t uart_config = {
-        .baud_rate = CONFIG_UART_BITRATE,
+        .baud_rate = baud_rate,
         .data_bits = UART_DATA_8_BITS,
         .parity    = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
@@ -241,12 +214,11 @@ static esp_err_t bridge_uart_init(void)
     return ESP_OK;
 }
 
-static struct server_port echo_server   = {.port = CONFIG_ECHO_PORT,   .handler = do_echo};
-static struct server_port bridge_server = {.port = CONFIG_BRIDGE_PORT, .handler = do_bridge, .uart = UART_NUM_1};
+static struct server_port bridge_server = { .handler = do_bridge, .uart = UART_NUM_1};
 
-void tcp_server_create(void)
+void tcp_server_create(const settings_t *settings)
 {
-    ESP_ERROR_CHECK(bridge_uart_init());
-    xTaskCreate(tcp_server_task, "echo_server",   4096, (void*)&echo_server,   5, NULL);
+    ESP_ERROR_CHECK(bridge_uart_init(settings->uart_baud_rate));
+    bridge_server.port = settings->tcp_port;
     xTaskCreate(tcp_server_task, "bridge_server", 4096, (void*)&bridge_server, 5, NULL);
 }
