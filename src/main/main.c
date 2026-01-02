@@ -20,6 +20,7 @@
 #include "nvs_flash.h"
 #include "settings.h"
 #include "driver/gpio.h"
+#include "lwip/inet.h"
 
 static const char *TAG = "bridge";
 
@@ -124,6 +125,38 @@ void app_main(void)
         esp_netif_t *eth_netif = esp_netif_new(&cfg);
         // Attach Ethernet driver to TCP/IP stack
         ESP_ERROR_CHECK(esp_netif_attach(eth_netif, esp_eth_new_netif_glue(eth_handles[0])));
+
+        // Apply static IP configuration if requested
+        if (settings.use_static_ip) {
+            ESP_LOGI(TAG, "Using static IP configuration");
+            esp_netif_dhcpc_stop(eth_netif);
+
+            esp_netif_ip_info_t ip_info = { 0 };
+            struct in_addr addr;
+            if (settings.ip_addr[0] && inet_aton(settings.ip_addr, &addr)) {
+                ip_info.ip.addr = addr.s_addr;
+            }
+            if (settings.netmask[0] && inet_aton(settings.netmask, &addr)) {
+                ip_info.netmask.addr = addr.s_addr;
+            }
+            if (settings.gateway[0] && inet_aton(settings.gateway, &addr)) {
+                ip_info.gw.addr = addr.s_addr;
+            }
+            ESP_ERROR_CHECK(esp_netif_set_ip_info(eth_netif, &ip_info));
+
+            // Configure DNS servers if provided
+            esp_netif_dns_info_t dns;
+            if (settings.dns1[0] && inet_aton(settings.dns1, &addr)) {
+                dns.ip.type = ESP_IPADDR_TYPE_V4;
+                dns.ip.u_addr.ip4.addr = addr.s_addr;
+                ESP_ERROR_CHECK(esp_netif_set_dns_info(eth_netif, ESP_NETIF_DNS_MAIN, &dns));
+            }
+            if (settings.dns2[0] && inet_aton(settings.dns2, &addr)) {
+                dns.ip.type = ESP_IPADDR_TYPE_V4;
+                dns.ip.u_addr.ip4.addr = addr.s_addr;
+                ESP_ERROR_CHECK(esp_netif_set_dns_info(eth_netif, ESP_NETIF_DNS_BACKUP, &dns));
+            }
+        }
     } else {
         // Use ESP_NETIF_INHERENT_DEFAULT_ETH when multiple Ethernet interfaces are used and so you need to modify
         // esp-netif configuration parameters for each interface (name, priority, etc.).
